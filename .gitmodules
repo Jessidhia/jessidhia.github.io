@@ -1,0 +1,4 @@
+[submodule "themes/hyde"]
+	path = themes/hyde
+	url = https://github.com/getzola/hyde.git
+	branch = master
