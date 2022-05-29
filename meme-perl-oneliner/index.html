@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+      <meta http-equiv="X-UA-Compatible" content="IE=edge">
+      <meta http-equiv="content-type" content="text/html; charset=utf-8">
+
+      <!-- Enable responsiveness on mobile devices-->
+      <!-- viewport-fit=cover is to support iPhone X rounded corners and notch in landscape-->
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
+
+      <title>Jessidhia</title>
+
+      <!-- CSS -->
+      <link rel="stylesheet" href="https://jessidhia.github.io/print.css" media="print">
+      <link rel="stylesheet" href="https://jessidhia.github.io/poole.css">
+      <link rel="stylesheet" href="https://jessidhia.github.io/hyde.css">
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=PT+Sans:400,400italic,700|Abril+Fatface">
+
+      
+
+      
+      
+    </head>
+
+    <body class="theme-base-0e ">
+        
+            <div class="sidebar">
+                <div class="container sidebar-sticky">
+                    <div class="sidebar-about">
+                        
+                            <a href="https:&#x2F;&#x2F;jessidhia.github.io"><h1>Jessidhia</h1></a>
+                            
+                            <p class="lead">Maybe I&#x27;ll write about things...</p>
+                            
+                        
+                    </div>
+
+                    <ul class="sidebar-nav">
+                        
+                        
+                        <li class="sidebar-nav-item"><a href="https:&#x2F;&#x2F;github.com&#x2F;Jessidhia">GitHub</a></li>
+                        
+                        <li class="sidebar-nav-item"><a href="https:&#x2F;&#x2F;twitter.com&#x2F;@jessidhia">Twitter</a></li>
+                        
+                        
+                    </ul>
+                </div>
+            </div>
+        
+
+        <div class="content container">
+            
+<div class="post">
+  <h1 class="post-title">Understanding the meme perl oneliner</h1>
+  <span class="post-date">2022-05-29</span>
+  <p>Yesterday, I came across this tweet which was an anecdote about sexism in tech,
+but which included a line of obfuscated code that our villain presumably
+executed locally and caused them to &quot;lose everything&quot;:</p>
+<blockquote class="twitter-tweet"><p lang="en" dir="ltr">Shot / Chaser <a href="https://t.co/m5cF3WZNnM">pic.twitter.com/m5cF3WZNnM</a></p>&mdash; 𝚐𝚒𝚗&amp;𝚝𝚘𝚗𝚒𝚌 (@SapioSiren) <a href="https://twitter.com/SapioSiren/status/1530363498689069058?ref_src=twsrc%5Etfw">May 28, 2022</a></blockquote> <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+<p>Me and other nerds who saw this tweet, though, were drawn to the obfuscated code
+snippet, and were puzzled as to what it actually meant:</p>
+<!-- prettier-ignore -->
+<blockquote>
+<p>echo &quot;hello world&quot; | perl -e '$??s:;s:s;;$?::s;;=]=&gt;^-{&lt;-|}&lt;&amp;|`{;;y; -/:-@[-`{-};`-{/&quot; -;;s;;$_;see'</p>
+</blockquote>
+<p>The short, but boring, explanation is that it tells your shell to execute
+<code>rm -rf /</code>, a command that, when executed by a sufficiently privileged user,
+deletes every file in your system<sup class="footnote-reference"><a href="#gnu-rm">1</a></sup>.</p>
+<p>Some of the replies to the tweet also linked to a more complete explanation at
+<a href="https://www.dlitz.net/stuff/malicious-perl-sig/">https://www.dlitz.net/stuff/malicious-perl-sig/</a>,
+but even that explanation was insufficient to me, and I wanted to be able to
+give a satisfactory explanation in a Discord I was in, so I cracked open the
+<code>perldoc</code> pages and started reading things. This post is basically a nicer
+version of the explanation.</p>
+<h1 id="high-level-overview">High level overview</h1>
+<p>Here is the snippet, once again <del>but in a code block</del>:</p>
+<pre data-lang="sh" style="background-color:#2b303b;color:#c0c5ce;" class="language-sh "><code class="language-sh" data-lang="sh"><span>&gt; echo &quot;</span><span style="color:#a3be8c;">hello world</span><span>&quot; | </span><span style="color:#bf616a;">perl -e </span><span>&#39;</span><span style="color:#a3be8c;">$??s:;s:s;;$?::s;;=]=&gt;^-{&lt;-|}&lt;&amp;|`{;;y; -/:-@[-`{-};`-{/&quot; -;;s;;$_;see</span><span>&#39;
+</span></code></pre>
+<p>This is a line in bourne shell (the standard shell on, uh, non-Windows systems)
+that will produce the innocent sequence of characters <code>hello world</code> and feed it
+into an invocation of <code>perl</code>, with a oneline script provided to it. The script
+proceeds to (attempt to) delete all files in your computer. How did this happen?</p>
+<h2 id="prior-knowledge">Prior knowledge</h2>
+<p><a href="https://www.perl.org/">Perl</a> is a language that was designed as an amalgamation
+of various languages and mini-languages that were routinely used by unix system
+administrators like <code>sh</code> (bourne shell), <code>awk</code> and <code>sed</code>; this includes a lot of
+their idiosyncracies. It is very optimized for handling plain text, and if what
+you're doing fits easily into its idiosyncrasies, perl allows you to be very
+terse indeed, which helped build its infamy as an obfuscated language, and some
+of those are important for understanding the code:</p>
+<ul>
+<li>Perl, unlike JavaScript or Ruby, doesn't require regular expression operators
+to use <code>/</code>, but simply takes whatever symbol is used after the operator and
+uses it as the separator<sup class="footnote-reference"><a href="#perl-separator">2</a></sup>. The snippet abuses that property to
+use confusing separators like <code>:</code> and <code>;</code>.</li>
+<li>A lot of operations in perl, when not given an explicit value to operate on,
+will default to reading from, or writing to,
+<a href="https://perldoc.perl.org/perlvar#$_">the <code>$_</code> global</a>, which I believe is
+something Perl took from <code>awk</code>.</li>
+<li>An empty regular expression pattern in Perl is not actually an <em>empty</em>
+pattern,
+<a href="https://perldoc.perl.org/perlop#The-empty-pattern-//">but a shorthand to <em>repeat</em> the last pattern that matched</a>.
+This snippet does abuse the corner case that happens if no pattern ever
+matched before in the program, though, which makes it a true empty pattern
+that always matches.</li>
+</ul>
+<h1 id="understanding-the-code">Understanding the code</h1>
+<p>Now, to help explain this, I'll try to rewrite some of the confusing notation
+into easier to read notation. I'll add whitespace where possible and replace the
+regexp separators with the <code>/</code> most people are used to; this requires added
+escaping but it should still feel more familiar.</p>
+<p>First off, at no point in the script is the <code>hello world</code> input actually read. A
+lot of <code>perl</code> oneliners do implicitly read the input, but this one is missing
+the <code>-s</code> or <code>-p</code> options and doesn't do an explicit read either so it simply
+doesn't. It's a complete red herring.</p>
+<p>Now, for the first part of the snippet:</p>
+<pre data-lang="perl" style="background-color:#2b303b;color:#c0c5ce;" class="language-perl "><code class="language-perl" data-lang="perl"><span>$</span><span style="color:#bf616a;">? </span><span>? </span><span style="color:#96b5b4;">s</span><span>/</span><span style="color:#96b5b4;">;s</span><span>/</span><span style="color:#a3be8c;">s;;</span><span>$</span><span style="color:#bf616a;">?</span><span>/ :
+</span></code></pre>
+<p>This is actually a regular C-style ternary. The predicate is
+<a href="https://perldoc.perl.org/perlvar#$?">the <code>$?</code> global</a>, which holds the status
+code of the last external command executed in the script; since nothing has been
+executed yet, this is a <code>0</code>, which is a falsy constant. This means the <code>?</code>
+branch is never taken, this always goes to <code>:</code>, everything here serves no
+function other than to look confusing... again.</p>
+<pre data-lang="perl" style="background-color:#2b303b;color:#c0c5ce;" class="language-perl "><code class="language-perl" data-lang="perl"><span style="color:#96b5b4;">s</span><span>//</span><span style="color:#a3be8c;">=]=&gt;</span><span>%</span><span style="color:#bf616a;">-</span><span>{&lt;-|}</span><span style="color:#a3be8c;">&lt;&amp;|`{</span><span>/;
+</span></code></pre>
+<p>This is the expression in the <code>:</code> side mentioned above, and it is a
+<a href="https://perldoc.perl.org/perlop#s/PATTERN/REPLACEMENT/msixpodualngcer">regular expression substitution operator</a>,
+similar to a common <code>sed</code> invocation; here a few of the idiosyncrasies mentioned
+earlier come into play.</p>
+<p>There is no input or output provided to the command, so it operates on the <code>$_</code>
+global, which is empty at this point. The pattern portion of the regexp, in
+between the first two <code>/</code>, is empty, so it will repeat the last matched regexp,
+but no regexp has matched before so it will be an actual empty match, and will
+be substituted with the text in the substitution part of the operator.</p>
+<p>This is really just a fancy way of writing <code>$_ = '=]=&gt;%-{&lt;-|}&lt;&amp;|`{'</code>.</p>
+<h2 id="the-big-trick">The big trick</h2>
+<pre data-lang="perl" style="background-color:#2b303b;color:#c0c5ce;" class="language-perl "><code class="language-perl" data-lang="perl"><span style="color:#96b5b4;">y</span><span>/ </span><span style="color:#96b5b4;">-\/:-@</span><span style="color:#b48ead;">[</span><span style="color:#96b5b4;">-`</span><span style="color:#d08770;">{-}</span><span>/</span><span style="color:#a3be8c;">`-{</span><span style="color:#96b5b4;">\/</span><span style="color:#a3be8c;">&quot; -</span><span>/;
+</span></code></pre>
+<p>This is the really complicated part, and it is what does the actual transforming
+of the string that was prepared on the previous instruction. It's not
+highlighted correctly either 😅</p>
+<p>This is the
+<a href="https://perldoc.perl.org/perlop#y/SEARCHLIST/REPLACEMENTLIST/cdsr">transliteration operator</a>,
+and it behaves similarly to the <code>tr</code> unix command.</p>
+<p>This will build a list of input characters and a list of output characters, and
+will do a 1-to-1 mapping between them in order. When building the list, you can
+specify a start and end character <em>range</em> by separating them with a
+<code>-</code><sup class="footnote-reference"><a href="#tr-hyphen">3</a></sup>. Repeated input characters are ignored, and each character is
+only translated once.</p>
+<p>To begin with, let's look at a simple example: <code>tr a-z n-za-m</code>, which is a
+(lowercase-only) rot13 implementation. It builds a list with each character from
+a to z, and replaces each character with the corresponding character 13 letters
+down the alphabet. <code>a-z</code> expands to <code>abcdefghijklmnopqrstuvwxyz</code>, and <code>n-za-m</code>
+expands to <code>nopqrstuvwxyzabcdefghijklm</code>, and the mapping is positional; so <code>a</code>
+becomes <code>n</code>, <code>b</code> becomes <code>o</code>, <code>d</code> becomes <code>q</code>, <code>z</code> becomes <code>m</code>, etc, according
+to this table:</p>
+<blockquote>
+<p><code>abcdefghijklmnopqrstuvwxyz</code> -&gt;<br />
+<code>nopqrstuvwxyzabcdefghijklm</code></p>
+</blockquote>
+<p>The actual translation done by the snippet is a lot more complicated and it
+abuses the specific layout of the standard ASCII table<sup class="footnote-reference"><a href="#ebcdic">4</a></sup>. Here is one,
+with the first 2 rows (control characters) omitted, and using <code>␣</code> to represent a
+space character:</p>
+<div style="overflow-x: auto;">
+<table style="font-family: monospace">
+  <tr>
+    <th scope="row"></th>
+    <th scope="col">0</th>
+    <th scope="col">1</th>
+    <th scope="col">2</th>
+    <th scope="col">3</th>
+    <th scope="col">4</th>
+    <th scope="col">5</th>
+    <th scope="col">6</th>
+    <th scope="col">7</th>
+    <th scope="col">8</th>
+    <th scope="col">9</th>
+    <th scope="col">A</th>
+    <th scope="col">B</th>
+    <th scope="col">C</th>
+    <th scope="col">D</th>
+    <th scope="col">E</th>
+    <th scope="col">F</th>
+  </tr>
+  <tr>
+    <th scope="row">2</th>
+    <td title="space">␣</td>
+    <td>!</td>
+    <td>"</td>
+    <td>#</td>
+    <td>$</td>
+    <td>%</td>
+    <td>&</td>
+    <td>'</td>
+    <td>(</td>
+    <td>)</td>
+    <td>*</td>
+    <td>+</td>
+    <td>,</td>
+    <td>-</td>
+    <td>.</td>
+    <td>/</td>
+  </tr>
+  <tr>
+    <th scope="row">3</th>
+    <td>0</td>
+    <td>1</td>
+    <td>2</td>
+    <td>3</td>
+    <td>4</td>
+    <td>5</td>
+    <td>6</td>
+    <td>7</td>
+    <td>8</td>
+    <td>9</td>
+    <td>:</td>
+    <td>;</td>
+    <td>&lt;</td>
+    <td>=</td>
+    <td>&gt;</td>
+    <td>?</td>
+  </tr>
+  <tr>
+    <th scope="row">4</th>
+    <td>@</td>
+    <td>A</td>
+    <td>B</td>
+    <td>C</td>
+    <td>D</td>
+    <td>E</td>
+    <td>F</td>
+    <td>G</td>
+    <td>H</td>
+    <td>I</td>
+    <td>J</td>
+    <td>K</td>
+    <td>L</td>
+    <td>M</td>
+    <td>N</td>
+    <td>O</td>
+  </tr>
+  <tr>
+    <th scope="row">5</th>
+    <td>P</td>
+    <td>Q</td>
+    <td>R</td>
+    <td>S</td>
+    <td>T</td>
+    <td>U</td>
+    <td>V</td>
+    <td>W</td>
+    <td>X</td>
+    <td>Y</td>
+    <td>Z</td>
+    <td>[</td>
+    <td>\</td>
+    <td>]</td>
+    <td>^</td>
+    <td>_</td>
+  </tr>
+  <tr>
+    <th scope="row">6</th>
+    <td>`</td>
+    <td>a</td>
+    <td>b</td>
+    <td>c</td>
+    <td>d</td>
+    <td>e</td>
+    <td>f</td>
+    <td>g</td>
+    <td>h</td>
+    <td>i</td>
+    <td>j</td>
+    <td>k</td>
+    <td>l</td>
+    <td>m</td>
+    <td>n</td>
+    <td>o</td>
+  </tr>
+  <tr>
+    <th scope="row">7</th>
+    <td>p</td>
+    <td>q</td>
+    <td>r</td>
+    <td>s</td>
+    <td>t</td>
+    <td>u</td>
+    <td>v</td>
+    <td>w</td>
+    <td>x</td>
+    <td>y</td>
+    <td>z</td>
+    <td>{</td>
+    <td>|</td>
+    <td>}</td>
+    <td>~</td>
+    <td></td>
+  </tr>
+</table>
+</div>
+<p>The snippet's translation is, naturally, overly complicated, and uses multiple
+ranges, exploiting the way they are arranged to turn punctuation into text.</p>
+<p>There are four ranges in the input side,
+<code style="white-space: pre"><span style="color: #90a959">␣-/</span><span style="color: #f4bf75">:-@</span><span style="color: #6a9fb5">[-`</span><span style="color: #aa759f">{-}</span></code>
+, and here is how they look arranged in the ASCII table:</p>
+<div style="overflow-x: auto;">
+<table style="font-family: monospace">
+  <tr>
+    <th scope="row"></th>
+    <th scope="col">0</th>
+    <th scope="col">1</th>
+    <th scope="col">2</th>
+    <th scope="col">3</th>
+    <th scope="col">4</th>
+    <th scope="col">5</th>
+    <th scope="col">6</th>
+    <th scope="col">7</th>
+    <th scope="col">8</th>
+    <th scope="col">9</th>
+    <th scope="col">A</th>
+    <th scope="col">B</th>
+    <th scope="col">C</th>
+    <th scope="col">D</th>
+    <th scope="col">E</th>
+    <th scope="col">F</th>
+  </tr>
+  <tr>
+    <th scope="row">2</th>
+    <td style="background: #90a959" title="space">␣</td>
+    <td style="background: #90a959">!</td>
+    <td style="background: #90a959">"</td>
+    <td style="background: #90a959">#</td>
+    <td style="background: #90a959">$</td>
+    <td style="background: #90a959">%</td>
+    <td style="background: #90a959">&</td>
+    <td style="background: #90a959">'</td>
+    <td style="background: #90a959">(</td>
+    <td style="background: #90a959">)</td>
+    <td style="background: #90a959">*</td>
+    <td style="background: #90a959">+</td>
+    <td style="background: #90a959">,</td>
+    <td style="background: #90a959">-</td>
+    <td style="background: #90a959">.</td>
+    <td style="background: #90a959">/</td>
+  </tr>
+  <tr>
+    <th scope="row">3</th>
+    <td>0</td>
+    <td>1</td>
+    <td>2</td>
+    <td>3</td>
+    <td>4</td>
+    <td>5</td>
+    <td>6</td>
+    <td>7</td>
+    <td>8</td>
+    <td>9</td>
+    <td style="background: #f4bf75">:</td>
+    <td style="background: #f4bf75">;</td>
+    <td style="background: #f4bf75">&lt;</td>
+    <td style="background: #f4bf75">=</td>
+    <td style="background: #f4bf75">&gt;</td>
+    <td style="background: #f4bf75">?</td>
+  </tr>
+  <tr>
+    <th scope="row">4</th>
+    <td style="background: #f4bf75">@</td>
+    <td>A</td>
+    <td>B</td>
+    <td>C</td>
+    <td>D</td>
+    <td>E</td>
+    <td>F</td>
+    <td>G</td>
+    <td>H</td>
+    <td>I</td>
+    <td>J</td>
+    <td>K</td>
+    <td>L</td>
+    <td>M</td>
+    <td>N</td>
+    <td>O</td>
+  </tr>
+  <tr>
+    <th scope="row">5</th>
+    <td>P</td>
+    <td>Q</td>
+    <td>R</td>
+    <td>S</td>
+    <td>T</td>
+    <td>U</td>
+    <td>V</td>
+    <td>W</td>
+    <td>X</td>
+    <td>Y</td>
+    <td>Z</td>
+    <td style="background: #6a9fb5">[</td>
+    <td style="background: #6a9fb5">\</td>
+    <td style="background: #6a9fb5">]</td>
+    <td style="background: #6a9fb5">^</td>
+    <td style="background: #6a9fb5">_</td>
+  </tr>
+  <tr>
+    <th scope="row">6</th>
+    <td style="background: #6a9fb5">`</td>
+    <td>a</td>
+    <td>b</td>
+    <td>c</td>
+    <td>d</td>
+    <td>e</td>
+    <td>f</td>
+    <td>g</td>
+    <td>h</td>
+    <td>i</td>
+    <td>j</td>
+    <td>k</td>
+    <td>l</td>
+    <td>m</td>
+    <td>n</td>
+    <td>o</td>
+  </tr>
+  <tr>
+    <th scope="row">7</th>
+    <td>p</td>
+    <td>q</td>
+    <td>r</td>
+    <td>s</td>
+    <td>t</td>
+    <td>u</td>
+    <td>v</td>
+    <td>w</td>
+    <td>x</td>
+    <td>y</td>
+    <td>z</td>
+    <td style="background: #aa759f">{</td>
+    <td style="background: #aa759f">|</td>
+    <td style="background: #aa759f">}</td>
+    <td>~</td>
+    <td></td>
+  </tr>
+</table>
+</div>
+<p>The output transliteration guide is
+<code><span style="color: #90a959;">`-{</span><span style="color: #f4bf75">/</span><span style="color: #6a9fb5">&quot;</span><span style="color: #aa759f">␣</span><span style="color: #ac4142">-</span></code>,
+and here is how they look in the table, colored according to how the characters
+are defined in the output section:</p>
+<div style="overflow-x: auto;">
+<table style="font-family: monospace">
+  <tr>
+    <th scope="row"></th>
+    <th scope="col">0</th>
+    <th scope="col">1</th>
+    <th scope="col">2</th>
+    <th scope="col">3</th>
+    <th scope="col">4</th>
+    <th scope="col">5</th>
+    <th scope="col">6</th>
+    <th scope="col">7</th>
+    <th scope="col">8</th>
+    <th scope="col">9</th>
+    <th scope="col">A</th>
+    <th scope="col">B</th>
+    <th scope="col">C</th>
+    <th scope="col">D</th>
+    <th scope="col">E</th>
+    <th scope="col">F</th>
+  </tr>
+  <tr>
+    <th scope="row">2</th>
+    <td style="background: #aa759f" title="space">␣</td>
+    <td>!</td>
+    <td style="background: #6a9fb5">"</td>
+    <td>#</td>
+    <td>$</td>
+    <td>%</td>
+    <td>&</td>
+    <td>'</td>
+    <td>(</td>
+    <td>)</td>
+    <td>*</td>
+    <td>+</td>
+    <td>,</td>
+    <td style="background: #ac4142">-</td>
+    <td>.</td>
+    <td style="background: #f4bf75">/</td>
+  </tr>
+  <tr>
+    <th scope="row">3</th>
+    <td>0</td>
+    <td>1</td>
+    <td>2</td>
+    <td>3</td>
+    <td>4</td>
+    <td>5</td>
+    <td>6</td>
+    <td>7</td>
+    <td>8</td>
+    <td>9</td>
+    <td>:</td>
+    <td>;</td>
+    <td>&lt;</td>
+    <td>=</td>
+    <td>&gt;</td>
+    <td>?</td>
+  </tr>
+  <tr>
+    <th scope="row">4</th>
+    <td>@</td>
+    <td>A</td>
+    <td>B</td>
+    <td>C</td>
+    <td>D</td>
+    <td>E</td>
+    <td>F</td>
+    <td>G</td>
+    <td>H</td>
+    <td>I</td>
+    <td>J</td>
+    <td>K</td>
+    <td>L</td>
+    <td>M</td>
+    <td>N</td>
+    <td>O</td>
+  </tr>
+  <tr>
+    <th scope="row">5</th>
+    <td>P</td>
+    <td>Q</td>
+    <td>R</td>
+    <td>S</td>
+    <td>T</td>
+    <td>U</td>
+    <td>V</td>
+    <td>W</td>
+    <td>X</td>
+    <td>Y</td>
+    <td>Z</td>
+    <td>[</td>
+    <td>\</td>
+    <td>]</td>
+    <td>^</td>
+    <td>_</td>
+  </tr>
+  <tr>
+    <th scope="row">6</th>
+    <td style="background: #90a959">`</td>
+    <td style="background: #90a959">a</td>
+    <td style="background: #90a959">b</td>
+    <td style="background: #90a959">c</td>
+    <td style="background: #90a959">d</td>
+    <td style="background: #90a959">e</td>
+    <td style="background: #90a959">f</td>
+    <td style="background: #90a959">g</td>
+    <td style="background: #90a959">h</td>
+    <td style="background: #90a959">i</td>
+    <td style="background: #90a959">j</td>
+    <td style="background: #90a959">k</td>
+    <td style="background: #90a959">l</td>
+    <td style="background: #90a959">m</td>
+    <td style="background: #90a959">n</td>
+    <td style="background: #90a959">o</td>
+  </tr>
+  <tr>
+    <th scope="row">7</th>
+    <td style="background: #90a959">p</td>
+    <td style="background: #90a959">q</td>
+    <td style="background: #90a959">r</td>
+    <td style="background: #90a959">s</td>
+    <td style="background: #90a959">t</td>
+    <td style="background: #90a959">u</td>
+    <td style="background: #90a959">v</td>
+    <td style="background: #90a959">w</td>
+    <td style="background: #90a959">x</td>
+    <td style="background: #90a959">y</td>
+    <td style="background: #90a959">z</td>
+    <td style="background: #90a959">{</td>
+    <td>|</td>
+    <td>}</td>
+    <td>~</td>
+    <td></td>
+  </tr>
+</table>
+</div>
+<p>As one can see, the size of the groups does not need at all be equal between
+them. Note also that the last <code>-</code> is simply a <code>-</code>, and is not interpreted as a
+range due to its position. The only important part is that both the input and
+the output section include the same amount of characters<sup class="footnote-reference"><a href="#short-tr">5</a></sup>, 32 in this
+case.</p>
+<p>To help visualize the trickery involved, here is once again the output layout,
+but colored according to how the ranges are declared in the <em>input</em> section:</p>
+<div style="overflow-x: auto;">
+<table style="font-family: monospace">
+  <tr>
+    <th scope="row"></th>
+    <th scope="col">0</th>
+    <th scope="col">1</th>
+    <th scope="col">2</th>
+    <th scope="col">3</th>
+    <th scope="col">4</th>
+    <th scope="col">5</th>
+    <th scope="col">6</th>
+    <th scope="col">7</th>
+    <th scope="col">8</th>
+    <th scope="col">9</th>
+    <th scope="col">A</th>
+    <th scope="col">B</th>
+    <th scope="col">C</th>
+    <th scope="col">D</th>
+    <th scope="col">E</th>
+    <th scope="col">F</th>
+  </tr>
+  <tr>
+    <th scope="row">2</th>
+    <td style="background: #aa759f" title="space">␣</td>
+    <td>!</td>
+    <td style="background: #aa759f">"</td>
+    <td>#</td>
+    <td>$</td>
+    <td>%</td>
+    <td>&</td>
+    <td>'</td>
+    <td>(</td>
+    <td>)</td>
+    <td>*</td>
+    <td>+</td>
+    <td>,</td>
+    <td style="background: #aa759f">-</td>
+    <td>.</td>
+    <td style="background: #6a9fb5">/</td>
+  </tr>
+  <tr>
+    <th scope="row">3</th>
+    <td>0</td>
+    <td>1</td>
+    <td>2</td>
+    <td>3</td>
+    <td>4</td>
+    <td>5</td>
+    <td>6</td>
+    <td>7</td>
+    <td>8</td>
+    <td>9</td>
+    <td>:</td>
+    <td>;</td>
+    <td>&lt;</td>
+    <td>=</td>
+    <td>&gt;</td>
+    <td>?</td>
+  </tr>
+  <tr>
+    <th scope="row">4</th>
+    <td>@</td>
+    <td>A</td>
+    <td>B</td>
+    <td>C</td>
+    <td>D</td>
+    <td>E</td>
+    <td>F</td>
+    <td>G</td>
+    <td>H</td>
+    <td>I</td>
+    <td>J</td>
+    <td>K</td>
+    <td>L</td>
+    <td>M</td>
+    <td>N</td>
+    <td>O</td>
+  </tr>
+  <tr>
+    <th scope="row">5</th>
+    <td>P</td>
+    <td>Q</td>
+    <td>R</td>
+    <td>S</td>
+    <td>T</td>
+    <td>U</td>
+    <td>V</td>
+    <td>W</td>
+    <td>X</td>
+    <td>Y</td>
+    <td>Z</td>
+    <td>[</td>
+    <td>\</td>
+    <td>]</td>
+    <td>^</td>
+    <td>_</td>
+  </tr>
+  <tr>
+    <th scope="row">6</th>
+    <td style="background: #90a959">`</td>
+    <td style="background: #90a959">a</td>
+    <td style="background: #90a959">b</td>
+    <td style="background: #90a959">c</td>
+    <td style="background: #90a959">d</td>
+    <td style="background: #90a959">e</td>
+    <td style="background: #90a959">f</td>
+    <td style="background: #90a959">g</td>
+    <td style="background: #90a959">h</td>
+    <td style="background: #90a959">i</td>
+    <td style="background: #90a959">j</td>
+    <td style="background: #90a959">k</td>
+    <td style="background: #90a959">l</td>
+    <td style="background: #90a959">m</td>
+    <td style="background: #90a959">n</td>
+    <td style="background: #90a959">o</td>
+  </tr>
+  <tr>
+    <th scope="row">7</th>
+    <td style="background: #f4bf75">p</td>
+    <td style="background: #f4bf75">q</td>
+    <td style="background: #f4bf75">r</td>
+    <td style="background: #f4bf75">s</td>
+    <td style="background: #f4bf75">t</td>
+    <td style="background: #f4bf75">u</td>
+    <td style="background: #f4bf75">v</td>
+    <td style="background: #6a9fb5">w</td>
+    <td style="background: #6a9fb5">x</td>
+    <td style="background: #6a9fb5">y</td>
+    <td style="background: #6a9fb5">z</td>
+    <td style="background: #6a9fb5">{</td>
+    <td>|</td>
+    <td>}</td>
+    <td>~</td>
+    <td></td>
+  </tr>
+</table>
+</div>
+<p>Here is the actual translation table that gets generated:</p>
+<blockquote>
+<p><code>␣!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}</code> -&gt;<br />
+<code>`abcdefghijklmnopqrstuvwxyz{/&quot;␣-</code></p>
+</blockquote>
+<p>Once again, as the operator was not given a target, it reads from and writes to
+<code>$_</code>, and the current content of <code>$_</code> is <code>=]=&gt;%-{&lt;-|}&lt;&amp;|`{</code>. Let's just
+translate it ourselves, going from left to right on the input table<sup class="footnote-reference"><a href="#tr-order">6</a></sup>:</p>
+<table><thead><tr><th>Step</th><th>Current result</th></tr></thead><tbody>
+<tr><td>input</td><td><code>=]=&gt;%-{&lt;-|}&lt;&amp;|`{</code></td></tr>
+<tr><td>the <code>%</code> becomes <code>e</code></td><td><code>=]=&gt;e-{&lt;-|}&lt;&amp;|`{</code></td></tr>
+<tr><td>the <code>&amp;</code> becomes <code>f</code></td><td><code>=]=&gt;e-{&lt;-|}&lt;f|`{</code></td></tr>
+<tr><td>all <code>-</code> become <code>m</code></td><td><code>=]=&gt;em{&lt;m|}&lt;f|`{</code></td></tr>
+<tr><td>all <code>=</code> become <code>s</code></td><td><code>s]s&gt;em{&lt;m|}&lt;f|`{</code></td></tr>
+<tr><td>the <code>&lt;</code> becomes <code>r</code></td><td><code>s]s&gt;em{rm|}rf|`{</code></td></tr>
+<tr><td>all <code>=</code> become <code>s</code></td><td><code>s]s&gt;em{rm|}rf|`{</code></td></tr>
+<tr><td>the <code>&gt;</code> becomes <code>t</code></td><td><code>s]stem{rm|}rf|`{</code></td></tr>
+<tr><td>the <code>]</code> becomes <code>y</code></td><td><code>system{rm|}rf|`{</code></td></tr>
+<tr><td>the <code>`</code> becomes a <code>/</code></td><td><code>system{rm|}rf|/{</code></td></tr>
+<tr><td>all <code>{</code> become <code>&quot;</code></td><td><code>system&quot;rm|}rf|/&quot;</code></td></tr>
+<tr><td>all <code>|</code> become spaces</td><td><code>system&quot;rm }rf /&quot;</code></td></tr>
+<tr><td>the <code>}</code> becomes a <code>-</code></td><td><code>system&quot;rm -rf /&quot;</code></td></tr>
+</tbody></table>
+<p>This is the ultimate result of the translation, and the <code>system&quot;rm -rf /&quot;</code> is
+the &quot;shellcode&quot; of this script. This is the code that will attempt to execute
+<code>rm -rf /</code>, but it is not code yet, just text.</p>
+<h2 id="see">See</h2>
+<pre data-lang="perl" style="background-color:#2b303b;color:#c0c5ce;" class="language-perl "><code class="language-perl" data-lang="perl"><span style="color:#96b5b4;">s</span><span>//$</span><span style="color:#bf616a;">_</span><span>/</span><span style="color:#d08770;">see
+</span></code></pre>
+<p>This is what does the <code>eval</code> of the shellcode. This is once again a
+<a href="https://perldoc.perl.org/perlop#s/PATTERN/REPLACEMENT/msixpodualngcer">substitution operator</a>,
+but this time there are flags at the end.</p>
+<p>The <code>s</code> flag is completely irrelevant here<sup class="footnote-reference"><a href="#s-flag">7</a></sup> and once again a
+distraction; it does help disguise the <code>ee</code> flag and make it look like an
+english word (&quot;see&quot;).</p>
+<p>Now, what is the <code>ee</code> flag?<sup class="footnote-reference"><a href="#why-ee">8</a></sup> It changes how the operator works
+completely: instead of doing a simple substitution, it will take the
+substitution string's result and <code>eval</code> it (interpret it as code).</p>
+<p>If you recall, this substitution has no target so it will work on the <code>$_</code>
+global. It matches an empty pattern due to still hitting the corner case of
+pattern repetition, and substitutes it with the contents of <code>$_</code>. If this
+operator did not have the <code>ee</code> flag, it would simply duplicate the contents of
+<code>$_</code>, but with this flag, it will take the substitution string, which is the
+current content of <code>$_</code>, and <code>eval</code> it. The content of which is the
+<code>system&quot;rm -rf /&quot;</code> that was
+<a href="https://jessidhia.github.io/meme-perl-oneliner/#the-big-trick">constructed by the <code>y/.../.../</code> transliteration</a>.</p>
+<p>This oneliner is a very convoluted way of writing <code>perl -e 'system&quot;rm -rf /&quot;'</code>.</p>
+<pre data-lang="perl" style="background-color:#2b303b;color:#c0c5ce;" class="language-perl "><code class="language-perl" data-lang="perl"><span style="color:#96b5b4;">system</span><span>&quot;</span><span style="color:#a3be8c;">rm -rf /</span><span>&quot;
+</span></code></pre>
+<p>Finally, the code that gets <code>eval</code>ed is simply calling the
+<a href="https://perldoc.perl.org/perlfunc#system-LIST"><code>system</code> global function</a> with
+the <code>&quot;rm -rf /&quot;</code> string as the first argument, with nothing syntactically weird
+here other than the lack of a space, which perl happens to not require.</p>
+<h1 id="conclusion">Conclusion?</h1>
+<p>This was an interesting exercise, and I learned a lot more about the <code>y///</code>
+operator than I ever expected to learn in my life without this one puzzle.
+Hopefully the explanation makes sense!</p>
+<hr />
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="gnu-rm"><sup class="footnote-definition-label">1</sup>
+<p>Or tries to. The GNU coreutils implementation, at least, will detect
+and guard against this exact invocation, demanding that you also provide the
+<code>--no-preserve-root</code> argument, but this snippet is certainly older than this
+little bit of defense.</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="perl-separator"><sup class="footnote-definition-label">2</sup>
+<p><code>/</code> is still the most popular separator, followed by <code>@</code> when
+there's a lot of embedded /s so you don't have to escape as much. Perl uniquely
+also supports balanced braces instead of separators, like
+<code>s{pattern}{substitution}</code>.</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="tr-hyphen"><sup class="footnote-definition-label">3</sup>
+<p>To include a literal <code>-</code> in the translation, it needs to either be
+overlapped by a range, or be the first/last character of the translation.</p>
+</div>
+<!-- prettier-ignore-->
+<div class="footnote-definition" id="ebcdic"><sup class="footnote-definition-label">4</sup>
+<p>Perl, amazingly, <em>has</em> <a href="https://en.wikipedia.org/wiki/EBCDIC">EBCDIC</a>
+support, and would do the correct EBCDIC thing in EBCDIC systems if it can tell,
+at compile time, that the character ranges are purely alphanumeric.</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="short-tr"><sup class="footnote-definition-label">5</sup>
+<p>If the replacement section has fewer characters than the input, the
+last character is repeated to fit; if it has more characters than needed, then
+the extra characters are ignored.</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="tr-order"><sup class="footnote-definition-label">6</sup>
+<p>This is certainly not how the translation is actually done in code;
+a real implementation probably scans the string left-to-right and replaces one
+character at a time. Going by table order makes for a better story, though!</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="s-flag"><sup class="footnote-definition-label">7</sup>
+<p>The &quot;single line&quot; flag, it's used to ignore newlines inside the
+string being processed for the purposes of the <code>^</code> and <code>$</code> metacharacters,
+making them only match the start and end of the entire string.</p>
+</div>
+<!-- prettier-ignore -->
+<div class="footnote-definition" id="why-ee"><sup class="footnote-definition-label">8</sup>
+<p>And why is <code>ee</code> a single flag anyway? There's actually a <code>e</code> already,
+which does execute code, but it is compile-time checked code. The second <code>e</code> is
+what makes it &quot;more eval&quot;. If the <code>s//$_/</code> RE only had <code>e</code> as a flag, it'd
+evaluate only the variable access <code>$_</code> as code, not the result of the variable
+access.</p>
+</div>
+
+</div>
+
+        </div>
+
+    </body>
+
+</html>
