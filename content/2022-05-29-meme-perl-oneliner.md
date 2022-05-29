@@ -6,9 +6,9 @@ description = "an old perl joke resurfaced and I was curious on how it actually 
 tags = ["perl"]
 +++
 
-Yesterday, I came across this tweet which was a joke about sexism in tech, but
-which included a line of obfuscated code that our villain presumably executed
-locally and caused them to "lose everything":
+Yesterday, I came across this tweet which was an anecdote about sexism in tech,
+but which included a line of obfuscated code that our villain presumably
+executed locally and caused them to "lose everything":
 
 <blockquote class="twitter-tweet"><p lang="en" dir="ltr">Shot / Chaser <a href="https://t.co/m5cF3WZNnM">pic.twitter.com/m5cF3WZNnM</a></p>&mdash; 𝚐𝚒𝚗&amp;𝚝𝚘𝚗𝚒𝚌 (@SapioSiren) <a href="https://twitter.com/SapioSiren/status/1530363498689069058?ref_src=twsrc%5Etfw">May 28, 2022</a></blockquote> <script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
 
