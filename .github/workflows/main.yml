@@ -1,6 +1,6 @@
 # On every push this script is executed
 on: push
-name: Build and deploy zola to GH Pages
+name: zola-build-deploy
 jobs:
   build:
     runs-on: ubuntu-latest
